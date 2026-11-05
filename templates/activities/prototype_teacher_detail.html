@@ -3,7 +3,10 @@
 {% block content %}
 <link rel="stylesheet" href="{% static 'prototype_teacher_detail.css' %}">
 <div class="proto">
-  <p class="back"><a href="{% url 'teacher_activities' %}">← Mis actividades</a></p>
+  <p class="back">
+    <a href="{% url 'teacher_activities' %}">← Mis actividades</a> ·
+    <a href="{% url 'teacher_activity_detail' activity.pk %}">Ver historial de inscripción</a>
+  </p>
   {% if variant == 'A' %}
   <header class="proto-head"><p class="eyebrow">Detalle de actividad</p><div class="title-line"><h1>{{ activity.title }}</h1><span class="state {% if not activity.is_active %}off{% endif %}">{% if activity.is_active %}● Habilitada{% else %}● Deshabilitada{% endif %}</span></div><p class="lead">{{ activity.description }}</p></header>
   <section class="summary" aria-label="Resumen de la actividad"><div><span>Inicio</span><strong>{{ activity.starts_at|date:"d/m/Y" }}</strong><small>{{ activity.starts_at|date:"H:i" }} h</small></div><div><span>Inscripciones vigentes</span><strong>{{ activity.occupied }} <small>/ {{ activity.capacity }}</small></strong><small>sobre la capacidad total</small></div><div><span>Cupos disponibles</span><strong>{{ activity.available }}</strong><small>de {{ activity.capacity }} en total</small></div></section>

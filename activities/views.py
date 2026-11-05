@@ -9,7 +9,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 from .forms import RegistrationForm
 from .models import Registration
-from .services import CANCELLATION_WINDOW_HOURS, MESSAGES, can_cancel, cancel_registration, register, set_activity_enabled, with_availability
+from .services import CANCELLATION_WINDOW_HOURS, MESSAGES, can_cancel, cancel_registration, register, registration_block_reason, set_activity_enabled, with_availability
 
 SUCCESS_RESULTS = {"registered", "reregistered", "cancelled", "enabled", "disabled_activity"}
 
@@ -32,17 +32,11 @@ def detail(request, pk):
     activity = get_object_or_404(with_availability(), pk=pk)
     registration = Registration.objects.filter(activity=activity, student=request.user).first()
     now = timezone.now()
-    blocked_reason = None
-    if not activity.is_active:
-        blocked_reason = MESSAGES["disabled"]
-    elif activity.starts_at <= now:
-        blocked_reason = MESSAGES["started"]
-    elif activity.available <= 0:
-        blocked_reason = MESSAGES["full"]
+    blocked = registration_block_reason(activity, now=now, available=activity.available)
     return render(request, "activities/detail.html", {
         "activity": activity,
         "registration": registration,
-        "registration_blocked_reason": blocked_reason,
+        "registration_blocked_reason": MESSAGES.get(blocked),
         "can_cancel": can_cancel(registration, now),
         "cancellation_window_hours": CANCELLATION_WINDOW_HOURS,
         "form": RegistrationForm(),

@@ -36,6 +36,18 @@ def can_cancel(registration, now=None):
     """Una inscripción vigente puede cancelarse solo dentro de la ventana."""
     return registration is not None and registration.cancelled_at is None and within_cancellation_window(registration.activity, now)
 
+def registration_block_reason(activity, *, now, available=None):
+    if not activity.is_active:
+        return "disabled"
+    if activity.starts_at <= now:
+        return "started"
+    if available is None:
+        occupied = activity.registrations.filter(cancelled_at__isnull=True).count()
+        available = activity.capacity - occupied
+    if available <= 0:
+        return "full"
+    return None
+
 def register(*, student, activity_id, now=None):
     try:
         # SQLite adquiere la reserva de escritura ANTES de leer cupos (IMMEDIATE).
@@ -46,13 +58,10 @@ def register(*, student, activity_id, now=None):
             registration = Registration.objects.filter(student=student, activity=activity).first()
             if registration is not None and registration.cancelled_at is None:
                 return "already_registered"
-            if not activity.is_active:
-                return "disabled"
             now = now or timezone.now()  # Instante real después de adquirir IMMEDIATE.
-            if activity.starts_at <= now:
-                return "started"
-            if activity.registrations.filter(cancelled_at__isnull=True).count() >= activity.capacity:
-                return "full"
+            blocked = registration_block_reason(activity, now=now)
+            if blocked:
+                return blocked
             if registration is not None:
                 registration.cancelled_at = None
                 registration.save(update_fields=["cancelled_at"])

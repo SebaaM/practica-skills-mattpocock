@@ -1,6 +1,6 @@
 from datetime import timedelta
 from unittest.mock import Mock, patch
-from django.test import Client
+from django.test import Client, override_settings
 from django.utils import timezone
 from activities.models import Registration, RegistrationEvent
 from activities.services import cancel_registration, register
@@ -97,12 +97,12 @@ class ViewTests(BaseCase):
     def test_stale_reregistration_form_rechecks_full_disabled_and_exact_start(self):
         self.client.force_login(self.ana)
         configurations = [
-            ("La actividad no tiene cupos disponibles.", {}),
-            ("La actividad está deshabilitada.", {"is_active": False}),
-            ("La actividad ya comenzó.", {"starts_at": NOW}),
+            ("full", "La actividad no tiene cupos disponibles.", {}),
+            ("disabled", "La actividad está deshabilitada.", {"is_active": False}),
+            ("started", "La actividad ya comenzó.", {"starts_at": NOW}),
         ]
-        for message, changes in configurations:
-            with self.subTest(message):
+        for result, message, changes in configurations:
+            with self.subTest(result):
                 target = activity(capacity=1)
                 self.assertEqual(register(student=self.ana, activity_id=target.pk, now=NOW), "registered")
                 self.assertEqual(cancel_registration(student=self.ana, activity_id=target.pk, now=NOW), "cancelled")
@@ -117,12 +117,43 @@ class ViewTests(BaseCase):
                     else:
                         self.assertEqual(register(student=self.bruno, activity_id=target.pk, now=NOW), "registered")
                     response = self.client.post(detail_url + "register/", follow=True)
-                    self.assertContains(response, message)
+                    self.assertContains(
+                        response,
+                        f'<p class="message {result} warning info" role="status">{message}</p>',
+                        html=True,
+                    )
                     self.assertContains(response, "Inscripción cancelada el 01/10/2030 09:00")
                     self.assertNotContains(response, "Reinscribirme")
                 registration.refresh_from_db()
                 self.assertEqual(registration.cancelled_at, NOW)
                 self.assertEqual(list(registration.history.values_list("kind", "occurred_at")), [("cancelled", NOW)])
+
+    def test_reregistration_can_be_retried_after_another_student_releases_a_seat(self):
+        self.activity.capacity = 1
+        self.activity.save(update_fields=["capacity"])
+        self.enroll()
+        self.cancel()
+        self.assertEqual(register(student=self.bruno, activity_id=self.activity.pk, now=NOW), "registered")
+        self.client.force_login(self.ana)
+        other_student = Client()
+        other_student.force_login(self.bruno)
+        detail_url = f"/activities/{self.activity.pk}/"
+        retry_at = NOW + timedelta(hours=1)
+        with freeze_view_clock(self.client, retry_at):
+            response = self.client.post(f"{detail_url}register/", follow=True)
+            self.assertContains(
+                response,
+                '<p class="message full warning info" role="status">La actividad no tiene cupos disponibles.</p>',
+                html=True,
+            )
+            self.assertNotContains(response, "Reinscribirme")
+        with freeze_view_clock(other_student, retry_at):
+            self.assertRedirects(other_student.post(f"{detail_url}cancel/"), detail_url)
+        with freeze_view_clock(self.client, retry_at):
+            self.assertContains(self.client.get(detail_url), "Reinscribirme")
+            response = self.client.post(f"{detail_url}register/", follow=True)
+            self.assertContains(response, "Reinscripción confirmada.")
+            self.assertContains(response, "Tu inscripción está confirmada.")
 
     def test_reregistering_with_another_account_keeps_the_original_cancellation(self):
         self.enroll()
@@ -361,6 +392,15 @@ class ViewTests(BaseCase):
             </ol>
         """, html=True)
         self.assertEqual(self.client.get(teacher_url).status_code, 403)
+
+    @override_settings(DEBUG=True)
+    def test_teacher_prototype_variants_link_to_the_canonical_history(self):
+        self.client.force_login(self.activity.responsible)
+        url = f"/teacher/activities/{self.activity.pk}/"
+        for variant in "ABC":
+            with self.subTest(variant):
+                response = self.client.get(url, {"variant": variant})
+                self.assertContains(response, f'<a href="{url}">Ver historial de inscripción</a>', html=True)
 
     def test_teacher_detail_requires_staff_and_ownership(self):
         from django.contrib.auth import get_user_model
