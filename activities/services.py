@@ -2,7 +2,7 @@ from datetime import timedelta
 from django.db import OperationalError, transaction
 from django.db.models import Count, F, Q
 from django.utils import timezone
-from .models import Activity, Registration
+from .models import Activity, Registration, RegistrationEvent
 
 CANCELLATION_WINDOW_HOURS = 24
 CANCELLATION_WINDOW = timedelta(hours=CANCELLATION_WINDOW_HOURS)
@@ -12,7 +12,7 @@ MESSAGES = {
     "disabled_activity": "Actividad deshabilitada; se conservaron las inscripciones vigentes.",
     "registered": "Inscripción confirmada.",
     "already_registered": "Ya estás inscripto en esta actividad.",
-    "previously_cancelled": "Cancelaste tu inscripción; no podés volver a inscribirte.",
+    "reregistered": "Reinscripción confirmada.",
     "full": "La actividad no tiene cupos disponibles.",
     "started": "La actividad ya comenzó.",
     "disabled": "La actividad está deshabilitada.",
@@ -44,8 +44,8 @@ def register(*, student, activity_id, now=None):
             if activity is None:
                 return "not_available"
             registration = Registration.objects.filter(student=student, activity=activity).first()
-            if registration is not None:
-                return "already_registered" if registration.cancelled_at is None else "previously_cancelled"
+            if registration is not None and registration.cancelled_at is None:
+                return "already_registered"
             if not activity.is_active:
                 return "disabled"
             now = now or timezone.now()  # Instante real después de adquirir IMMEDIATE.
@@ -53,6 +53,11 @@ def register(*, student, activity_id, now=None):
                 return "started"
             if activity.registrations.filter(cancelled_at__isnull=True).count() >= activity.capacity:
                 return "full"
+            if registration is not None:
+                registration.cancelled_at = None
+                registration.save(update_fields=["cancelled_at"])
+                registration.history.create(kind=RegistrationEvent.Kind.REREGISTERED, occurred_at=now)
+                return "reregistered"
             Registration.objects.create(student=student, activity=activity)
             return "registered"
     except OperationalError as error:
@@ -78,6 +83,7 @@ def cancel_registration(*, student, activity_id, now=None):
                 return "window_closed"
             registration.cancelled_at = now
             registration.save(update_fields=["cancelled_at"])
+            registration.history.create(kind=RegistrationEvent.Kind.CANCELLED, occurred_at=now)
             return "cancelled"
     except OperationalError as error:
         if "locked" in str(error).lower():

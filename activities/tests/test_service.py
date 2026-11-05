@@ -2,7 +2,7 @@ from datetime import timedelta
 from unittest.mock import patch
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, OperationalError, transaction
-from activities.models import Registration
+from activities.models import Registration, RegistrationEvent
 from activities.services import cancel_registration, register, with_availability
 from .support import NOW, BaseCase, activity
 
@@ -64,21 +64,22 @@ class ServiceTests(BaseCase):
     def test_success_and_availability(self):
         self.assertEqual(self.enroll(), "registered")
         self.assertEqual(with_availability().get(pk=self.activity.pk).available, 1)
-    def test_previously_cancelled_even_when_now_full_disabled_or_started(self):
-        self.activity.capacity=1; self.activity.save()
-        self.enroll(); self.cancel()
-        self.activity.starts_at=NOW; self.activity.is_active=False; self.activity.save()
-        self.assertEqual(self.enroll(), "previously_cancelled")
-        self.assertEqual(Registration.objects.count(), 1)
     def test_duplicate_even_when_now_full_or_started(self):
         self.enroll()
         self.activity.capacity=1; self.activity.starts_at=NOW; self.activity.is_active=False; self.activity.save()
         self.assertEqual(self.enroll(), "already_registered")
         self.assertEqual(Registration.objects.count(), 1)
-    def test_reregistration_over_cancelled_is_its_own_result_and_creates_no_row(self):
-        self.enroll(); self.cancel()
-        self.assertEqual(self.enroll(), "previously_cancelled")
-        self.assertEqual(Registration.objects.count(), 1)
+    def test_history_contention_rolls_back_reregistration_and_allows_retry(self):
+        self.enroll()
+        self.cancel()
+        with patch.object(RegistrationEvent, "save", side_effect=OperationalError("database is locked")):
+            self.assertEqual(self.enroll(), "busy")
+        registration = Registration.objects.get()
+        self.assertEqual(registration.cancelled_at, NOW)
+        self.assertEqual(with_availability().get(pk=self.activity.pk).available, 2)
+        self.assertEqual(list(registration.history.values_list("kind", "occurred_at")), [("cancelled", NOW)])
+        self.assertEqual(self.enroll(), "reregistered")
+
     def test_full(self):
         self.activity.capacity=1; self.activity.save(); self.enroll()
         self.assertEqual(self.enroll(self.bruno), "full")

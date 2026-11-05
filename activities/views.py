@@ -11,7 +11,7 @@ from .forms import RegistrationForm
 from .models import Registration
 from .services import CANCELLATION_WINDOW_HOURS, MESSAGES, can_cancel, cancel_registration, register, set_activity_enabled, with_availability
 
-SUCCESS_RESULTS = {"registered", "cancelled", "enabled", "disabled_activity"}
+SUCCESS_RESULTS = {"registered", "reregistered", "cancelled", "enabled", "disabled_activity"}
 
 def flash_result(request, result):
     severity = "success" if result in SUCCESS_RESULTS else "warning"
@@ -32,8 +32,21 @@ def detail(request, pk):
     activity = get_object_or_404(with_availability(), pk=pk)
     registration = Registration.objects.filter(activity=activity, student=request.user).first()
     now = timezone.now()
-    open_for_registration = activity.is_active and activity.starts_at > now and activity.available > 0
-    return render(request, "activities/detail.html", {"activity": activity, "registration": registration, "can_register": open_for_registration and registration is None, "can_cancel": can_cancel(registration, now), "cancellation_window_hours": CANCELLATION_WINDOW_HOURS, "form": RegistrationForm()})
+    blocked_reason = None
+    if not activity.is_active:
+        blocked_reason = MESSAGES["disabled"]
+    elif activity.starts_at <= now:
+        blocked_reason = MESSAGES["started"]
+    elif activity.available <= 0:
+        blocked_reason = MESSAGES["full"]
+    return render(request, "activities/detail.html", {
+        "activity": activity,
+        "registration": registration,
+        "registration_blocked_reason": blocked_reason,
+        "can_cancel": can_cancel(registration, now),
+        "cancellation_window_hours": CANCELLATION_WINDOW_HOURS,
+        "form": RegistrationForm(),
+    })
 
 @login_required
 @require_POST

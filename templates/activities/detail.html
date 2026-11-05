@@ -18,17 +18,18 @@
   <section class="panel">
     {% if registration %}
       {% include 'activities/_registration_state.html' with registration=registration can_cancel=can_cancel %}
-      {% if registration.cancelled_at %}
-      <p>No podés volver a inscribirte en esta actividad.</p>
-      {% elif not can_cancel %}
-      <p class="muted">Solo podés cancelar hasta {{ cancellation_window_hours }} horas antes del inicio de la actividad.</p>
+    {% endif %}
+    {% if not registration or registration.cancelled_at %}
+      {% if registration_blocked_reason %}
+        <p class="muted">{% if registration %}{{ registration_blocked_reason }}{% else %}Esta actividad no admite nuevas inscripciones.{% endif %}</p>
+      {% else %}
+        <form method="post" action="{% url 'register' activity.pk %}" class="inline-form">
+          {% csrf_token %}{{ form }}
+          <button>{% if registration %}Reinscribirme{% else %}Inscribirme{% endif %}</button>
+        </form>
       {% endif %}
-    {% elif can_register %}
-    <form method="post" action="{% url 'register' activity.pk %}" class="inline-form">
-      {% csrf_token %}{{ form }}<button>Inscribirme</button>
-    </form>
-    {% else %}
-    <p class="muted">Esta actividad no admite nuevas inscripciones.</p>
+    {% elif not can_cancel %}
+      <p class="muted">Solo podés cancelar hasta {{ cancellation_window_hours }} horas antes del inicio de la actividad.</p>
     {% endif %}
   </section>
 </article>

@@ -82,3 +82,28 @@ class ConcurrencyTests(TransactionTestCase):
         self.assertFalse(with_availability().get(pk=self.activity.pk).is_active)
         self.assertEqual(Registration.objects.count(),1 if outcomes[0]=="registered" else 0)
         self.assertEqual(register(student=self.bruno,activity_id=self.activity.pk,now=NOW),"disabled")
+
+    def test_two_cancelled_registrations_compete_for_the_last_seat(self):
+        for student in (self.ana, self.bruno):
+            self.assertEqual(register(student=student, activity_id=self.activity.pk, now=NOW), "registered")
+            self.assertEqual(cancel_registration(student=student, activity_id=self.activity.pk, now=NOW), "cancelled")
+        self.assertCountEqual(self.race_registrations([self.ana, self.bruno]), ["reregistered", "full"])
+        self.assertEqual(Registration.objects.count(), 2)
+        self.assertEqual(with_availability().get(pk=self.activity.pk).available, 0)
+        winner = Registration.objects.get(cancelled_at__isnull=True)
+        loser = Registration.objects.get(cancelled_at__isnull=False)
+        self.assertEqual(loser.cancelled_at, NOW)
+        self.assertEqual(list(loser.history.values_list("kind", "occurred_at")), [("cancelled", NOW)])
+        self.assertEqual(list(winner.history.values_list("kind", "occurred_at")), [
+            ("cancelled", NOW), ("reregistered", NOW),
+        ])
+
+    def test_simultaneous_reregistration_keeps_only_one_history_event(self):
+        self.assertEqual(register(student=self.ana, activity_id=self.activity.pk, now=NOW), "registered")
+        self.assertEqual(cancel_registration(student=self.ana, activity_id=self.activity.pk, now=NOW), "cancelled")
+        self.assertCountEqual(
+            self.race_registrations([self.ana, self.ana]), ["reregistered", "already_registered"],
+        )
+        self.assertEqual(list(Registration.objects.get().history.values_list("kind", flat=True)), [
+            "cancelled", "reregistered",
+        ])

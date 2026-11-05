@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 from django.test import Client
 from django.utils import timezone
 from activities.models import Registration
-from activities.services import register
+from activities.services import cancel_registration, register
 from .support import NOW, BaseCase, activity, freeze_view_clock
 
 class ViewTests(BaseCase):
@@ -52,29 +52,90 @@ class ViewTests(BaseCase):
         self.assertEqual(self.cancel(now=NOW+timedelta(hours=1)),"already_cancelled")
         response=page()
         self.assertContains(response,"Inscripción cancelada el 01/10/2030 09:00")
-        self.assertNotContains(response,"Cancelar inscripción");self.assertNotContains(response,"Inscribirme")
-    def test_reregistration_over_cancelled_explains_and_creates_no_row(self):
-        self.client.force_login(self.ana); self.enroll(); self.cancel()
-        with freeze_view_clock(self.client, NOW):
-            page=self.client.get(f"/activities/{self.activity.pk}/")
-            response=self.client.post(f"/activities/{self.activity.pk}/register/", follow=True)
-        self.assertContains(page,"No podés volver a inscribirte en esta actividad.")
-        self.assertNotContains(page,"Inscribirme")
-        self.assertContains(response,"Cancelaste tu inscripción; no podés volver a inscribirte.")
-        self.assertNotContains(response,"Ya estás inscripto")
-        self.assertEqual(Registration.objects.count(),1)
-    def test_http_reregistration_blocked_when_full_disabled_or_started(self):
+        self.assertNotContains(response, "Cancelar inscripción")
+        self.assertContains(response, "Reinscribirme")
+    def test_reregistration_restores_the_same_registration_and_occupies_a_seat(self):
         self.client.force_login(self.ana)
-        configurations={"llena":dict(capacity=1),"deshabilitada":dict(is_active=False),"iniciada":dict(starts_at=timezone.now()-timedelta(hours=1))}
-        for name,config in configurations.items():
-            with self.subTest(name):
-                target=activity(title=name,**config)
-                Registration.objects.create(student=self.ana,activity=target,cancelled_at=NOW)
-                if name=="llena": Registration.objects.create(student=self.bruno,activity=target)
-                before=Registration.objects.count()
-                response=self.client.post(f"/activities/{target.pk}/register/",follow=True)
-                self.assertContains(response,"Cancelaste tu inscripción; no podés volver a inscribirte.")
-                self.assertEqual(Registration.objects.count(),before)
+        self.enroll()
+        self.cancel()
+        registration = Registration.objects.get()
+        detail_url = f"/activities/{self.activity.pk}/"
+        with freeze_view_clock(self.client, NOW + timedelta(hours=1)):
+            self.assertContains(self.client.get(detail_url), "Reinscribirme")
+            response = self.client.post(detail_url + "register/", follow=True)
+            self.assertContains(response, "Reinscripción confirmada.")
+            self.assertContains(response, "Tu inscripción está confirmada.")
+            self.assertContains(self.client.get("/my-registrations/"), "Tu inscripción está confirmada.")
+            self.assertContains(self.client.get("/activities/"), "1 cupos disponibles")
+            duplicate = self.client.post(detail_url + "register/", follow=True)
+            self.assertContains(duplicate, "Ya estás inscripto")
+        self.assertEqual(Registration.objects.get().pk, registration.pk)
+
+    def test_second_cancellation_at_window_boundary_keeps_the_full_history(self):
+        self.client.force_login(self.ana)
+        self.enroll()
+        self.cancel()
+        detail_url = f"/activities/{self.activity.pk}/"
+        reregistered_at = NOW + timedelta(hours=1)
+        boundary = self.activity.starts_at - timedelta(hours=24)
+        with freeze_view_clock(self.client, reregistered_at):
+            self.client.post(detail_url + "register/")
+        with freeze_view_clock(self.client, boundary):
+            response = self.client.post(detail_url + "cancel/", follow=True)
+            self.assertContains(response, "Inscripción cancelada. El cupo quedó liberado.")
+        with freeze_view_clock(self.client, boundary + timedelta(hours=1)):
+            response = self.client.post(detail_url + "register/", follow=True)
+            self.assertContains(response, "Tu inscripción está confirmada.")
+            self.assertNotContains(response, "Cancelar inscripción")
+        self.assertEqual(list(Registration.objects.get().history.values_list("kind", "occurred_at")), [
+            ("cancelled", NOW),
+            ("reregistered", reregistered_at),
+            ("cancelled", boundary),
+            ("reregistered", boundary + timedelta(hours=1)),
+        ])
+
+    def test_stale_reregistration_form_rechecks_full_disabled_and_exact_start(self):
+        self.client.force_login(self.ana)
+        configurations = [
+            ("La actividad no tiene cupos disponibles.", {}),
+            ("La actividad está deshabilitada.", {"is_active": False}),
+            ("La actividad ya comenzó.", {"starts_at": NOW}),
+        ]
+        for message, changes in configurations:
+            with self.subTest(message):
+                target = activity(capacity=1)
+                self.assertEqual(register(student=self.ana, activity_id=target.pk, now=NOW), "registered")
+                self.assertEqual(cancel_registration(student=self.ana, activity_id=target.pk, now=NOW), "cancelled")
+                registration = Registration.objects.get(student=self.ana, activity=target)
+                detail_url = f"/activities/{target.pk}/"
+                with freeze_view_clock(self.client, NOW):
+                    self.assertContains(self.client.get(detail_url), "Reinscribirme")
+                    if changes:
+                        for field, value in changes.items():
+                            setattr(target, field, value)
+                        target.save(update_fields=changes)
+                    else:
+                        self.assertEqual(register(student=self.bruno, activity_id=target.pk, now=NOW), "registered")
+                    response = self.client.post(detail_url + "register/", follow=True)
+                    self.assertContains(response, message)
+                    self.assertContains(response, "Inscripción cancelada el 01/10/2030 09:00")
+                    self.assertNotContains(response, "Reinscribirme")
+                registration.refresh_from_db()
+                self.assertEqual(registration.cancelled_at, NOW)
+                self.assertEqual(list(registration.history.values_list("kind", "occurred_at")), [("cancelled", NOW)])
+
+    def test_reregistering_with_another_account_keeps_the_original_cancellation(self):
+        self.enroll()
+        self.cancel()
+        self.client.force_login(self.bruno)
+        detail_url = f"/activities/{self.activity.pk}/"
+        with freeze_view_clock(self.client, NOW):
+            self.assertNotContains(self.client.get(detail_url), "Reinscribirme")
+            response = self.client.post(detail_url + "register/", {"student": self.ana.pk}, follow=True)
+        self.assertContains(response, "Inscripción confirmada.")
+        self.assertEqual(Registration.objects.get(student=self.ana).cancelled_at, NOW)
+        self.assertIsNone(Registration.objects.get(student=self.bruno).cancelled_at)
+
     def test_catalog_filters_and_full_visible(self):
         self.client.force_login(self.ana)
         full=activity(title="Completa",capacity=1)

@@ -32,6 +32,19 @@ class Registration(models.Model):
     def __str__(self):
         return f"{self.student} — {self.activity}"
 
+class RegistrationEvent(models.Model):
+    class Kind(models.TextChoices):
+        CANCELLED = "cancelled", "Cancelación"
+        REREGISTERED = "reregistered", "Reinscripción"
+
+    registration = models.ForeignKey(Registration, on_delete=models.CASCADE, related_name="history")
+    kind = models.CharField("cambio de estado", max_length=12, choices=Kind.choices)
+    occurred_at = models.DateTimeField("fecha y hora")
+
+    class Meta:
+        ordering = ["occurred_at", "pk"]
+
+
 class DemoSeed(models.Model):
     key = models.CharField(max_length=40, primary_key=True)
     reference_time = models.DateTimeField()
