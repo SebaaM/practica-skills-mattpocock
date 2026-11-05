@@ -6,9 +6,13 @@
 
 **Spec:** ../spec.md
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] La vista del docente muestra las cancelaciones y reinscripciones en orden cronológico con sus fechas.
-- [ ] El historial incluye una cancelación anterior al cambio y todos los cambios de un segundo ciclo.
-- [ ] La vista mantiene el estado actual y la ocupación correcta de la actividad.
-- [ ] Las pruebas HTTP verifican la consulta como docente y el control de acceso.
+- [x] La vista del docente muestra las cancelaciones y reinscripciones en orden cronológico con sus fechas.
+- [x] El historial incluye una cancelación anterior al cambio y todos los cambios de un segundo ciclo.
+- [x] La vista mantiene el estado actual y la ocupación correcta de la actividad.
+- [x] Las pruebas HTTP verifican la consulta como docente y el control de acceso.
+
+## Comments
+
+Implementado en 1156c67 y ajustado en edbd41a. Suite integrada: 70 pruebas OK y esquema sin cambios pendientes.
