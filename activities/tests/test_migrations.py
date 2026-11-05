@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.contrib.auth import get_user_model
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase
@@ -33,3 +34,7 @@ class RegistrationHistoryMigrationTests(TransactionTestCase):
         self.assertEqual(list(history.values_list("registration_id", "kind", "occurred_at")), [
             (cancelled.pk, "cancelled", NOW),
         ])
+
+        self.client.force_login(get_user_model().objects.get(pk=teacher.pk))
+        response = self.client.get(f"/teacher/activities/{activity.pk}/")
+        self.assertContains(response, "<li>Cancelación · 01/10/2030 09:00</li>", html=True)

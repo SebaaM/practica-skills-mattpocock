@@ -106,4 +106,7 @@ def teacher_activity_detail(request, pk):
     variant = request.GET.get("variant")
     if settings.DEBUG and variant in {"A", "B", "C"}:
         return render(request, "activities/prototype_teacher_detail.html", {"activity": activity, "registrations": registrations, "variant": variant})
-    return render(request, "activities/teacher_activity_detail.html", {"activity": activity, "registrations": registrations})
+    return render(request, "activities/teacher_activity_detail.html", {
+        "activity": activity,
+        "registrations": registrations.prefetch_related("history"),
+    })

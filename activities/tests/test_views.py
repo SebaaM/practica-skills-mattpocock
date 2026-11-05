@@ -2,7 +2,7 @@ from datetime import timedelta
 from unittest.mock import Mock, patch
 from django.test import Client
 from django.utils import timezone
-from activities.models import Registration
+from activities.models import Registration, RegistrationEvent
 from activities.services import cancel_registration, register
 from .support import NOW, BaseCase, activity, freeze_view_clock
 
@@ -309,6 +309,7 @@ class ViewTests(BaseCase):
         teacher=get_user_model().objects.create_user("docente-detalle",is_staff=True)
         target=activity(title="Actividad histórica",responsible=teacher,is_active=False,starts_at=NOW-timedelta(days=1))
         cancelled=Registration.objects.create(student=self.ana,activity=target,cancelled_at=NOW)
+        cancelled.history.create(kind=RegistrationEvent.Kind.CANCELLED, occurred_at=NOW)
         current=Registration.objects.create(student=self.bruno,activity=target)
         Registration.objects.filter(pk=cancelled.pk).update(created_at=NOW-timedelta(days=1))
         Registration.objects.filter(pk=current.pk).update(created_at=NOW-timedelta(days=2))
@@ -329,6 +330,38 @@ class ViewTests(BaseCase):
         self.assertContains(response,'Cancelada')
         html=response.content.decode()
         self.assertLess(html.index('bruno'),html.index('ana'))
+    def test_teacher_sees_two_cycles_and_current_occupancy(self):
+        teacher = Client()
+        teacher.force_login(self.activity.responsible)
+        self.client.force_login(self.ana)
+        activity_url = f"/activities/{self.activity.pk}/"
+        teacher_url = f"/teacher/activities/{self.activity.pk}/"
+
+        with freeze_view_clock(self.client, NOW):
+            self.assertRedirects(self.client.post(f"{activity_url}register/"), activity_url)
+        for hour in (1, 3):
+            with freeze_view_clock(self.client, NOW + timedelta(hours=hour)):
+                self.assertRedirects(self.client.post(f"{activity_url}cancel/"), activity_url)
+            response = teacher.get(teacher_url)
+            self.assertContains(response, "<td>Cancelada</td>", html=True)
+            self.assertContains(response, "0 / 2 inscripciones vigentes")
+
+            with freeze_view_clock(self.client, NOW + timedelta(hours=hour + 1)):
+                self.assertRedirects(self.client.post(f"{activity_url}register/"), activity_url)
+            response = teacher.get(teacher_url)
+            self.assertContains(response, "<td>Vigente</td>", html=True)
+            self.assertContains(response, "1 / 2 inscripciones vigentes")
+
+        self.assertContains(response, """
+            <ol>
+              <li>Cancelación · 01/10/2030 10:00</li>
+              <li>Reinscripción · 01/10/2030 11:00</li>
+              <li>Cancelación · 01/10/2030 12:00</li>
+              <li>Reinscripción · 01/10/2030 13:00</li>
+            </ol>
+        """, html=True)
+        self.assertEqual(self.client.get(teacher_url).status_code, 403)
+
     def test_teacher_detail_requires_staff_and_ownership(self):
         from django.contrib.auth import get_user_model
         User=get_user_model()
